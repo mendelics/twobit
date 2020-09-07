@@ -7,7 +7,6 @@
 package twobit
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/binary"
 	"fmt"
@@ -46,7 +45,10 @@ type twoBit struct {
 	records map[string]*seqRecord
 }
 
+// Reader reads twobits
 type Reader twoBit
+
+// Writer writes twobits
 type Writer twoBit
 
 func init() {
@@ -68,17 +70,17 @@ func packedSize(dnaSize int) int {
 	return (dnaSize + 3) >> 2
 }
 
-// Return length of block
+// Length - Return length of block
 func (b *Block) Length() int {
 	return b.start + b.count
 }
 
-// Return start of block
+// Start - Return start of block
 func (b *Block) Start() int {
 	return b.start
 }
 
-// Return count of block
+// Count - Return count of block
 func (b *Block) Count() int {
 	return b.count
 }
@@ -246,7 +248,7 @@ func (r *Reader) parseRecord(name string, coords bool) (*seqRecord, error) {
 	return rec, nil
 }
 
-// Return blocks of Ns in sequence with name
+// NBlocks - Return blocks of Ns in sequence with name
 func (r *Reader) NBlocks(name string) ([]*Block, error) {
 	rec, err := r.parseRecord(name, true)
 	if err != nil {
@@ -261,7 +263,7 @@ func (r *Reader) Read(name string) ([]byte, error) {
 	return r.ReadRange(name, 0, 0)
 }
 
-// Read sequence from start to end.
+// ReadRange - Read sequence from start to end.
 func (r *Reader) ReadRange(name string, start, end int) ([]byte, error) {
 	rec, err := r.parseRecord(name, true)
 	if err != nil {
@@ -394,7 +396,7 @@ func NewReader(r io.ReadSeeker) (*Reader, error) {
 	return tb, nil
 }
 
-// Returns the length for sequence with name
+// Length - Returns the length for sequence with name
 func (r *Reader) Length(name string) (int, error) {
 	rec, err := r.parseRecord(name, false)
 	if err != nil {
@@ -404,7 +406,7 @@ func (r *Reader) Length(name string) (int, error) {
 	return int(rec.dnaSize), nil
 }
 
-// Returns the length for sequence with name but does not count Ns
+// LengthNoN - Returns the length for sequence with name but does not count Ns
 func (r *Reader) LengthNoN(name string) (int, error) {
 	rec, err := r.parseRecord(name, true)
 	if err != nil {
@@ -419,7 +421,7 @@ func (r *Reader) LengthNoN(name string) (int, error) {
 	return int(rec.dnaSize) - n, nil
 }
 
-// Returns the names of sequences in the 2bit file
+// Names - Returns the names of sequences in the 2bit file
 func (r *Reader) Names() []string {
 	names := make([]string, len(r.index))
 
@@ -432,12 +434,12 @@ func (r *Reader) Names() []string {
 	return names
 }
 
-// Returns the count of sequences in the 2bit file
+// Count - Returns the count of sequences in the 2bit file
 func (r *Reader) Count() int {
 	return int(r.hdr.count)
 }
 
-// Returns the version of the 2bit file
+// Version - Returns the version of the 2bit file
 func (r *Reader) Version() int {
 	return int(r.hdr.version)
 }
@@ -456,207 +458,4 @@ func Unpack(raw []byte, sz int) string {
 	}
 
 	return string(dna.Bytes()[0:sz])
-}
-
-// Packs DNA sequence string into an array of bytes. 4 bases per byte.
-func Pack(s string) ([]byte, error) {
-	sz := len(s)
-	out := make([]byte, packedSize(sz))
-
-	idx := 0
-	for i := range out {
-		var b uint8
-		for j := 0; j < 4; j++ {
-			val := NT2BYTES['T']
-			if idx < sz {
-				// TODO: add check for unsupported base?
-				val = NT2BYTES[s[idx]]
-			}
-			b <<= 2
-			b += val
-			idx++
-		}
-		out[i] = b
-	}
-
-	return out, nil
-}
-
-// New Writer
-func NewWriter() *Writer {
-	tb := new(Writer)
-	tb.records = make(map[string]*seqRecord)
-
-	return tb
-}
-
-func mapMBlocks(seq string) []*Block {
-	blocks := make([]*Block, 0)
-
-	n := len(seq)
-	start := 0
-	match := false
-	isLast := false
-	for i := 0; i < n; i++ {
-		match = seq[i] >= 'a' && seq[i] <= 'z'
-		if match {
-			if !isLast {
-				start = i
-			}
-		} else {
-			if isLast {
-				blocks = append(blocks, &Block{start: start, count: i - start})
-			}
-		}
-		isLast = match
-	}
-
-	if isLast {
-		blocks = append(blocks, &Block{start: start, count: n - start})
-	}
-
-	return blocks
-}
-
-func mapNBlocks(seq string) []*Block {
-	blocks := make([]*Block, 0)
-
-	n := len(seq)
-	start := 0
-	match := false
-	isLast := false
-	for i := 0; i < n; i++ {
-		match = seq[i] == 'N' || seq[i] == 'n'
-		if match {
-			if !isLast {
-				start = i
-			}
-		} else {
-			if isLast {
-				blocks = append(blocks, &Block{start: start, count: i - start})
-			}
-		}
-		isLast = match
-	}
-
-	if isLast {
-		blocks = append(blocks, &Block{start: start, count: n - start})
-	}
-
-	return blocks
-}
-
-// Add sequence
-func (w *Writer) Add(name, seq string) error {
-	if len(name) > 255 {
-		return fmt.Errorf("Name string cannot be longer than 255 characters")
-	}
-	rec := new(seqRecord)
-	rec.dnaSize = uint32(len(seq))
-	rec.nBlocks = mapNBlocks(seq)
-	rec.mBlocks = mapMBlocks(seq)
-
-	pack, err := Pack(seq)
-	if err != nil {
-		return err
-	}
-
-	rec.sequence = pack
-
-	w.records[name] = rec
-
-	return nil
-}
-
-// Write sequences in 2bit format to out
-func (w *Writer) WriteTo(out io.Writer) error {
-	outbuf := bufio.NewWriter(out)
-
-	buf := make([]byte, 16)
-	binary.LittleEndian.PutUint32(buf[0:4], SIG)
-	binary.LittleEndian.PutUint32(buf[4:8], uint32(0))
-	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(w.records)))
-	binary.LittleEndian.PutUint32(buf[12:16], uint32(0))
-	_, err := outbuf.Write(buf)
-	if err != nil {
-		return err
-	}
-
-	idxSize := 0
-	recSize := 0
-	var names []string
-	for name, rec := range w.records {
-		names = append(names, name)
-		idxSize += 5 + len(name)
-		recSize += rec.size()
-	}
-
-	buf = make([]byte, idxSize)
-	offset := 16 + idxSize
-	idx := 0
-	// Write out index
-	for _, name := range names {
-		buf[idx] = uint8(len(name))
-		idx++
-		for j := 0; j < len(name); j++ {
-			buf[idx] = name[j]
-			idx++
-		}
-		binary.LittleEndian.PutUint32(buf[idx:idx+4], uint32(offset))
-		offset += w.records[name].size()
-		idx += 4
-	}
-
-	_, err = outbuf.Write(buf)
-	if err != nil {
-		return err
-	}
-
-	// Write out records
-	for _, name := range names {
-		rec := w.records[name]
-		sz := rec.size()
-		buf = make([]byte, sz)
-
-		binary.LittleEndian.PutUint32(buf[0:4], rec.dnaSize)
-		binary.LittleEndian.PutUint32(buf[4:8], uint32(len(rec.nBlocks)))
-		idx := 8
-		for _, b := range rec.nBlocks {
-			binary.LittleEndian.PutUint32(buf[idx:idx+4], uint32(b.start))
-			idx += 4
-		}
-		for _, b := range rec.nBlocks {
-			binary.LittleEndian.PutUint32(buf[idx:idx+4], uint32(b.count))
-			idx += 4
-		}
-
-		binary.LittleEndian.PutUint32(buf[idx:idx+4], uint32(len(rec.mBlocks)))
-		idx += 4
-		for _, b := range rec.mBlocks {
-			binary.LittleEndian.PutUint32(buf[idx:idx+4], uint32(b.start))
-			idx += 4
-		}
-		for _, b := range rec.mBlocks {
-			binary.LittleEndian.PutUint32(buf[idx:idx+4], uint32(b.count))
-			idx += 4
-		}
-
-		// reserved
-		binary.LittleEndian.PutUint32(buf[idx:idx+4], uint32(0))
-		idx += 4
-
-		copy(buf[idx:sz], rec.sequence[:])
-
-		_, err := outbuf.Write(buf)
-		if err != nil {
-			return err
-		}
-	}
-
-	err = outbuf.Flush()
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
